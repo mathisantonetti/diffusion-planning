@@ -6,7 +6,7 @@ This repository aims at giving a clean baseline to use diffusion planners for de
 ### Coming soon
 _ Generative Trajectory Stitching through Diffusion Composition : https://github.com/devinluo27/comp_diffuser_release/tree/main
 
-# Meta algorithms impplemented
+# Meta algorithms implemented
 
 ### Coming soon
 _ Habitizing Diffusion Planning for Efficient and Effective Decision Making : https://github.com/BayesBrain/Habi/tree/main
