@@ -12,6 +12,16 @@ class CmpDiffPlanner(BasePlanner):
         self.diffusion_model = utils.FullDiffusion(beta_0, beta_1, CustomDiTCompDiffuser, obs_dim, hidden_dim)
         self.loss_fn = nn.MSELoss()
 
+    def forward(self, init_states, goal_states, horizon, use_ar_sampling=False, T=100):
+        pass
+        trajs = torch.randn(1, init_states.shape[0], self.num_patches, horizon, init_states.shape[-1])
+
+        timesteps = np.flip(np.linspace(0.0, 1.0, T), 0)
+        for t in timesteps:
+            trajs = self.diffusion_model.step(trajs, t, T)
+        
+        return trajs
+
     def loss(self, batch, T=100):
         """
         batch : [trajectories : (B, H, obs_dim), actions : (B, H, act_dim))
@@ -32,6 +42,7 @@ class CmpDiffPlanner(BasePlanner):
         loss = self.diffusion_model.compute_loss((chunked_trajs, noise.view(-1, *noise.shape[2:])))
 
         return loss
+
     
 class CustomDiTCompDiffuser(nn.Module):
     def __init__(
@@ -39,7 +50,8 @@ class CustomDiTCompDiffuser(nn.Module):
         obs_dim,
         hidden_dim,
         num_heads=4,
-        mixed=True
+        mixed=True,
+        use_ar_sampling=False
     ):
         super().__init__()
         self.encoder = nn.Sequential(nn.Linear(obs_dim+1, hidden_dim), nn.GELU(approximate="tanh"))
@@ -48,8 +60,9 @@ class CustomDiTCompDiffuser(nn.Module):
         self.decoder = nn.Linear(hidden_dim, obs_dim)
         self.mixed = mixed
         self.hidden_dim = hidden_dim
+        self.use_ar_sampling = use_ar_sampling
 
-    def forward(self, t, full_traj):
+    def forward(self, t, full_traj, cond_data=None):
         """
         t : (T, 1, 1, 1, 1)
         full_traj : (T, B, K+2, H, D) (init+traj+goal)
@@ -61,23 +74,41 @@ class CustomDiTCompDiffuser(nn.Module):
         #print(full_traj[:,:,1:-1].shape)
         #print(horizon, self.hidden_dim)
         #print("t", t, "prev", full_traj[:,:,:-2])
-        full_traj = torch.cat((full_traj, t.repeat(1, batch_size, Kp2, horizon, 1)), dim=-1)
 
-        current_traj, prev_traj, future_traj = full_traj[:,:,1:-1].reshape(-1, horizon, obs_dim+1), full_traj[:,:,:-2].reshape(-1, horizon, obs_dim+1), full_traj[:,:,2:].reshape(-1, horizon, obs_dim+1)
+        full_traj = torch.cat((full_traj, t.repeat(1, batch_size, Kp2, horizon, 1)), dim=-1)
+        current_traj, future_traj = full_traj[:,:,1:-1].reshape(-1, horizon, obs_dim+1), full_traj[:,:,2:].reshape(-1, horizon, obs_dim+1)
+
+        if self.training or not(self.use_ar_sampling):
+            prev_traj = full_traj[:,:,:-2].reshape(-1, horizon, obs_dim+1)
+        elif not(cond_data is None):
+            prev_traj = cond_data
+        else:
+            raise NotImplementedError
+
+
         current_traj = self.encoder(current_traj)
+
+        current_pos_embed = generate_pos_embedding(horizon, self.hidden_dim, current_traj.device)
+        prevfuture_pos_embed = generate_pos_embedding(horizon, obs_dim+1, current_traj.device)
 
         #print("new prev", prev_traj)
 
 
         if(self.mixed):
-            transfo_traj, _ = self.transfo_previous(current_traj, prev_traj, future_traj)
+            transfo_traj, _ = self.transfo_previous(current_traj+current_pos_embed, prev_traj+prevfuture_pos_embed, future_traj+prevfuture_pos_embed)
             #print(transfo_traj.shape)
             return self.decoder(transfo_traj).view(-1, Kp2-2, horizon, obs_dim)
         
-        transfo_traj = self.transfo_previous(current_traj, prev_traj, prev_traj)
-        transfo_traj = self.transfo_future(transfo_traj, future_traj, future_traj)
+        transfo_traj = self.transfo_previous(current_traj+current_pos_embed, prev_traj+prevfuture_pos_embed, prev_traj+prevfuture_pos_embed)
+        transfo_traj = self.transfo_future(transfo_traj+current_pos_embed, future_traj+prevfuture_pos_embed, future_traj+prevfuture_pos_embed)
         #print(transfo_traj.shape)
         return self.decoder(transfo_traj).view(-1, Kp2-2, horizon, obs_dim)
+
+def generate_pos_embedding(horizon, dim, device):
+    pos_embed = torch.zeros(1, horizon, dim, requires_grad=False, device=device)
+    tmp_pos_arr = np.arange(horizon, dtype=np.int32 )
+    pos_embed.data.copy_(torch.from_numpy(get_1d_sincos_pos_embed_from_grid(embed_dim=dim, pos=tmp_pos_arr)).float().unsqueeze(0))
+    return pos_embed
 
 """
 class DiT1D_TjTi_Stgl_Cond_V1(nn.Module):

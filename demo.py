@@ -8,6 +8,7 @@ import numpy as np
 import imageio
 from pathlib import Path
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from diffusion_planning.planners import CmpDiffPlanner
 from diffusion_planning.invkinematics import BaseInvKinematic
@@ -18,7 +19,7 @@ from diffusion_planning.utils import transforms_dataset_ogbench
 output_directory = Path("/home/mantonetti/Documents/GCRL/outputs/")
 output_directory.mkdir(parents=True, exist_ok=True)
 
-num_epochs = 50
+num_epochs = 600
 
 # Make an environment and datasets (they will be automatically downloaded).
 dataset_name = 'humanoidmaze-medium-stitch-v0'
@@ -29,38 +30,55 @@ print("dataset loaded")
 train_dataset, observation_dim, action_dim = transforms_dataset_ogbench(train_dataset)
 val_dataset, _, _ = transforms_dataset_ogbench(val_dataset)
 
-train_dataloader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-val_dataloader = DataLoader(val_dataset, batch_size=32, shuffle=True)
+train_dataloader = DataLoader(train_dataset, batch_size=8, shuffle=True)
+val_dataloader = DataLoader(val_dataset, batch_size=8, shuffle=True)
 
 policy = BasePolicy(planner=CmpDiffPlanner, invkinematic=BaseInvKinematic, planner_args=[[observation_dim, 256, 0.1, 20.0, 4], {}], invkinematic_args=[[2*observation_dim, [512, 1024, 1024, 512, 256], action_dim, False], {}])
 
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+    print("GPU is available. Device set to:", device)
+else:
+    device = torch.device("cpu")
+    print(f"GPU is not available. Device set to: {device}. Inference will be slower than on GPU.")
+
+policy.to(device)
+
 optimizer = torch.optim.Adam([
         {"params": policy.planner.parameters()},
-        {"params": policy.invkinematic.parameters(), "lr": 1e-4},
-    ], lr=2e-4)
+        {"params": policy.invkinematic.parameters(), "lr": 1e-3},
+    ], lr=2e-3)
 
+best_val = np.inf
 
-for epoch in range(num_epochs):
+#torch.save(policy.state_dict(), dataset_name+"_best.pt")
+
+for epoch in tqdm(range(num_epochs)):
 
     # Train one epoch
+    policy.train()
     train_loss, step = 0.0, 0
     for batch in train_dataloader:
         #print(batch[0].shape, batch[1].shape)
         optimizer.zero_grad()
-        loss = policy.loss(batch)
+        loss = policy.loss([e.to(device) for e in batch])
         loss.backward()
         optimizer.step()
         train_loss += loss.item()
         step += 1
+    if epoch%10 == 0:
+        # Evaluate
+        policy.eval()
+        val_loss, val_step = 0.0, 0
+        for batch in val_dataloader:
+            val_loss += policy.loss([e.to(device) for e in batch]).item()
+            val_step += 1
 
-    # Evaluate
-    policy.eval()
-    val_loss, val_step = 0.0, 0
-    for batch in val_dataloader:
-        val_loss += policy.loss(batch).item()
-        step += 1
+        if best_val > val_loss:
+            best_Val = val_loss
+            torch.save(policy.state_dict(), dataset_name+"_best.pt")
 
-    print("epoch :", epoch, "| train loss :", train_loss/step, "| val loss :", val_loss/step)
+        print("epoch :", epoch, "| train loss :", train_loss/step, "| val loss :", val_loss/val_step)
 
 """
 # Evaluate the agent.

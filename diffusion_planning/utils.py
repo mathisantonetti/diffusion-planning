@@ -151,8 +151,9 @@ class MLP(nn.Module):
 
 # ----- Generic generative AI models -----
 
-class FullDiffusion():
+class FullDiffusion(nn.Module):
     def __init__(self, beta_0, beta_1, model, *args, **kwargs):
+        super().__init__()
         self.log_alpha = lambda t: -0.5*t*beta_0-0.25*t**2*(beta_1 - beta_0)
         self.dtlog_alpha = lambda t: -0.5*beta_0-0.5*t*(beta_1 - beta_0)
         self.sigma = lambda t: t
@@ -168,8 +169,8 @@ class FullDiffusion():
         Returns : _ X_t : (Nt, *)
         _ noise : (N_t, *)
         """
-        self.t = torch.rand(Nt, *[1 for i in range(len(data.shape))])
-        eps = torch.randn(Nt, *data.shape)
+        self.t = torch.rand(Nt, *[1 for i in range(len(data.shape))], device=data.device)
+        eps = torch.randn(Nt, *data.shape, device=data.device)
 
         data = data[None,...]*torch.exp(self.log_alpha(self.t))+self.sigma(self.t)*eps
         return (data, eps)
@@ -186,17 +187,21 @@ class FullDiffusion():
         else:
             preds = self.score_model(self.t, data, cond_data)
 
-        print(eps.shape, preds.shape)
+        #print(eps.shape, preds.shape)
         loss = torch.mean(torch.sum((eps+preds)**2, dim=-1))
         #model_loss = self.score_model.compute_loss()
         #print(loss, model_loss)
         return loss
     
+    def step(self, X_t, t, T):
+        dt = 1/T
+        return X_t - dt*(self.dtlog_alpha(t)*X_t - 2*self.beta(t)*self.score_model(t*torch.ones(1, 1, 1), X_t)) + np.sqrt(2*self.sigma(t)*self.beta(t)*dt)*torch.randn(*X_t.shape, device=X_t.device)
+    
     def generate_samples(self, T, B, S):
         timesteps = np.flip(np.linspace(0.0, 1.0, T), 0)
         X_t, dt = torch.randn(1, B, S), 1/T
         for t in timesteps:
-            X_t = X_t - dt*(self.dtlog_alpha(t)*X_t - 2*self.beta(t)*self.score_model(t*torch.ones(1, 1, 1), X_t)) + np.sqrt(2*self.sigma(t)*self.beta(t)*dt)*torch.randn(*X_t.shape)
+            X_t = X_t - dt*(self.dtlog_alpha(t)*X_t - 2*self.beta(t)*self.score_model(t*torch.ones(1, 1, 1), X_t)) + np.sqrt(2*self.sigma(t)*self.beta(t)*dt)*torch.randn(*X_t.shape, device=X_t.device)
         return X_t.detach().numpy()
     
 # ----- computing tools -----
