@@ -1,5 +1,5 @@
 # Diffusion Planning
-This repository aims at giving a clean baseline to use diffusion planners for decision making
+This repository aims at giving a clean baseline in PyTorch to use diffusion planners for decision making
 
 ## Algorithms implemented
 

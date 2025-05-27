@@ -1,0 +1,1 @@
+from diffusion_planning.invkinematics.base import BaseInvKinematic
