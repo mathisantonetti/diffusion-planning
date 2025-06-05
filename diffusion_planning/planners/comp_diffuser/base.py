@@ -12,15 +12,20 @@ class CmpDiffPlanner(BasePlanner):
         self.diffusion_model = utils.FullDiffusion(beta_0, beta_1, CustomDiTCompDiffuser, obs_dim, hidden_dim)
         self.loss_fn = nn.MSELoss()
 
-    def forward(self, init_states, goal_states, horizon, use_ar_sampling=False, T=100):
-        pass
-        trajs = torch.randn(1, init_states.shape[0], self.num_patches, horizon, init_states.shape[-1])
+    def forward(self, init_states, goal_states, horizon=10, use_ar_sampling=False, T=100):
+        #pass
+        new_trajs = torch.randn(1, init_states.shape[0], self.num_patches, horizon, init_states.shape[-1], device=init_states.device)
+        new_trajs._requires_grad = False
+        #print(init_states.dtype, goal_states.dtype)
+
+        #print(new_trajs.shape)
 
         timesteps = np.flip(np.linspace(0.0, 1.0, T), 0)
         for t in timesteps:
-            trajs = self.diffusion_model.step(trajs, t, T)
+            trajs = torch.cat((init_states[None,:,None,None,:].repeat(1, 1, self.num_patches, horizon, 1), new_trajs, goal_states[None,:,None,None,:].repeat(1, 1, self.num_patches, horizon, 1)), dim=2) # concat init and goal states
+            new_trajs = self.diffusion_model.step(trajs, t, T)
         
-        return trajs
+        return [new_trajs[0, :, i//horizon, i%horizon] for i in range(self.num_patches*horizon)]
 
     def loss(self, batch, T=100):
         """
@@ -55,8 +60,8 @@ class CustomDiTCompDiffuser(nn.Module):
     ):
         super().__init__()
         self.encoder = nn.Sequential(nn.Linear(obs_dim+1, hidden_dim), nn.GELU(approximate="tanh"))
-        self.transfo_previous = nn.MultiheadAttention(hidden_dim, num_heads, batch_first=True, kdim=obs_dim+1, vdim=obs_dim+1)
-        self.transfo_future = nn.MultiheadAttention(hidden_dim, num_heads, batch_first=True, kdim=obs_dim+1, vdim=obs_dim+1)
+        self.transfo_previous = nn.MultiheadAttention(hidden_dim, num_heads, batch_first=True)
+        self.transfo_future = nn.MultiheadAttention(hidden_dim, num_heads, batch_first=True) # kdim=obs_dim+1, vdim=obs_dim+1
         self.decoder = nn.Linear(hidden_dim, obs_dim)
         self.mixed = mixed
         self.hidden_dim = hidden_dim
@@ -87,20 +92,22 @@ class CustomDiTCompDiffuser(nn.Module):
 
 
         current_traj = self.encoder(current_traj)
+        prev_traj = self.encoder(prev_traj)
+        future_traj = self.encoder(future_traj)
 
-        current_pos_embed = generate_pos_embedding(horizon, self.hidden_dim, current_traj.device)
-        prevfuture_pos_embed = generate_pos_embedding(horizon, obs_dim+1, current_traj.device)
+        pos_embed = generate_pos_embedding(horizon, self.hidden_dim, current_traj.device)
+        #prevfuture_pos_embed = generate_pos_embedding(horizon, obs_dim+1, current_traj.device)
 
         #print("new prev", prev_traj)
 
 
         if(self.mixed):
-            transfo_traj, _ = self.transfo_previous(current_traj+current_pos_embed, prev_traj+prevfuture_pos_embed, future_traj+prevfuture_pos_embed)
+            transfo_traj, _ = self.transfo_previous(current_traj+pos_embed, prev_traj+pos_embed, future_traj+pos_embed)
             #print(transfo_traj.shape)
             return self.decoder(transfo_traj).view(-1, Kp2-2, horizon, obs_dim)
         
-        transfo_traj = self.transfo_previous(current_traj+current_pos_embed, prev_traj+prevfuture_pos_embed, prev_traj+prevfuture_pos_embed)
-        transfo_traj = self.transfo_future(transfo_traj+current_pos_embed, future_traj+prevfuture_pos_embed, future_traj+prevfuture_pos_embed)
+        transfo_traj = self.transfo_previous(current_traj+pos_embed, prev_traj+pos_embed, prev_traj+pos_embed)
+        transfo_traj = self.transfo_future(transfo_traj+pos_embed, future_traj+pos_embed, future_traj+pos_embed)
         #print(transfo_traj.shape)
         return self.decoder(transfo_traj).view(-1, Kp2-2, horizon, obs_dim)
 

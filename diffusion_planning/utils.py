@@ -164,10 +164,12 @@ class FullDiffusion(nn.Module):
 
     def add_noise(self, data, Nt=100):
         """
-        data : (*, )
+        Parameters :
+        _ data | Tensor(*) : the data to noise 
 
-        Returns : _ X_t : (Nt, *)
-        _ noise : (N_t, *)
+        Returns : 
+        _ X_t | Tensor(Nt, *) : noisy data
+        _ noise | Tensor(Nt, *) : noise
         """
         self.t = torch.rand(Nt, *[1 for i in range(len(data.shape))], device=data.device)
         eps = torch.randn(Nt, *data.shape, device=data.device)
@@ -177,7 +179,12 @@ class FullDiffusion(nn.Module):
 
     def compute_loss(self, tuple_noisy, cond_data=None):
         """
-        data : (*, D)
+        Parameters :
+        _ tuple_noisy | (Tensor(*, D), Tensor(*, D))
+        _ cond_data | Anything
+
+        Returns :
+        _ DDPM loss 
         """
         data, eps = tuple_noisy
 
@@ -194,8 +201,18 @@ class FullDiffusion(nn.Module):
         return loss
     
     def step(self, X_t, t, T):
+        """
+        Parameters :
+        _ X_t | Tensor(1, B, K+2, *) : input data
+        _ t | float : timestep
+        _ T | int : total number of timesteps
+
+        Returns :
+        _ output data | Tensor(1, B, K, *) 
+        """
         dt = 1/T
-        return X_t - dt*(self.dtlog_alpha(t)*X_t - 2*self.beta(t)*self.score_model(t*torch.ones(1, 1, 1), X_t)) + np.sqrt(2*self.sigma(t)*self.beta(t)*dt)*torch.randn(*X_t.shape, device=X_t.device)
+        print(self.score_model(t*torch.ones(*([1]*len(X_t.shape)), device=X_t.device), X_t)[None,...].shape, X_t.shape)
+        return X_t[:,:,1:-1] - dt*(self.dtlog_alpha(t)*X_t[:,:,1:-1] - 2*self.beta(t)*self.score_model(t*torch.ones(*([1]*len(X_t.shape)), device=X_t.device), X_t)) + np.sqrt(2*self.sigma(t)*self.beta(t)*dt)*torch.randn_like(X_t[:,:,1:-1])
     
     def generate_samples(self, T, B, S):
         timesteps = np.flip(np.linspace(0.0, 1.0, T), 0)
